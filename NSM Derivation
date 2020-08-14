@@ -1,0 +1,82 @@
+import pandas as pd
+import numpy as np 
+import json
+
+import numpy as np
+import matplotlib.pyplot as plt
+base = pd.read_csv("baseData.csv")
+base
+level1Series = base['metadata'].apply(json.loads)
+level1Df = pd.DataFrame(level1Series.tolist())
+level2Series = level1Df['legacyMapping']
+level2Df = pd.DataFrame(level1Df['legacyMapping'].tolist())
+attrDf = base
+attrDf['segTypeLabel'] = level1Df['types']
+attrDf = pd.concat([attrDf, level2Df], axis=1, sort=False)
+attrDf = attrDf.drop(columns='metadata')
+
+attrDf['bics'] = attrDf['bics'].fillna(0).astype(int)
+attrDf['segTypeLabel'] = attrDf['segTypeLabel'].astype(str)
+attrDf['geo'] = attrDf['geo'].astype(str)
+attrDf['hasProduct'] = attrDf['segTypeLabel'].str.contains('PRODUCT')
+attrDf['hasService'] = attrDf['segTypeLabel'].str.contains('SERVICE')
+attrDf['hasLocation'] = attrDf['segTypeLabel'].str.contains('LOCATION')
+attrDf['hasCorporate'] = attrDf['segTypeLabel'].str.contains('CORPORATE')
+attrDf['hasOther'] = attrDf['segTypeLabel'].str.contains('BUSINESS_UNIT|ASSET|CUSTOMER|BRAND')
+attrDf['hasOpSeg/Loc'] = attrDf['segTypeLabel'].str.contains('OPERATING_SEGMENT|LOCATION')
+attrDf['hasBoth'] = attrDf['hasProduct'] & attrDf['hasService']
+geosMissingLocation = attrDf[(attrDf['geo']!='None') & (attrDf['hasLocation']==False)]
+attrDf[attrDf['segTypeLabel'].str.contains('CORPORATE')]
+def setType(bics, product, service, both, count, other):
+    if bics in (9999, 551114):
+        return 'CORPORATE'
+    if (both > 0.5) or (both == max(product,service, both, other)):
+        return 'PRODUCT & SERVICE'
+    if (product > 0.5) or (product == max(product,service)):
+        return 'PRODUCT'
+    if (service > 0.5) or (service == max(product,service)):
+        return 'SERVICE'
+    else:
+        return 
+bicsToType = pd.DataFrame(attrDf.groupby(['bics'])['hasProduct','hasService','hasCorporate','hasOther','hasOpSeg/Loc','hasBoth',
+                                                   'hasLocation'].sum()).reset_index()
+bicsToType['totalCount'] = bicsToType['bics'].map(attrDf['bics'].value_counts())
+bicsToType['%Product'] = bicsToType['hasProduct']/(bicsToType['totalCount']-bicsToType['hasOpSeg/Loc'])
+bicsToType['%Service'] = bicsToType['hasService']/(bicsToType['totalCount']-bicsToType['hasOpSeg/Loc'])
+bicsToType['%Both'] = bicsToType['hasBoth']/(bicsToType['totalCount']-bicsToType['hasOpSeg/Loc'])
+bicsToType['%Corporate'] = bicsToType['hasCorporate']/(bicsToType['totalCount']-bicsToType['hasOpSeg/Loc'])
+bicsToType['%Other'] = bicsToType['hasOther']/(bicsToType['totalCount']-bicsToType['hasOpSeg/Loc'])
+bicsToType['%OpSeg'] = bicsToType['hasOpSeg/Loc']/(bicsToType['totalCount']-bicsToType['hasOpSeg/Loc'])
+bicsToType[(bicsToType['%Both']<0.5) & (bicsToType['%Product']>0.5)]
+#bicsToType
+n_bins = 50
+x = bicsToType['%Product']
+
+fig, ax = plt.subplots(figsize=(8, 4))
+
+# plot the cumulative histogram
+n, bins, patches = ax.hist(x, bins=bins, density=True, histtype='step', cumulative=1,
+        label='Reversed emp.')
+
+geoToType = pd.DataFrame(attrDf.groupby(['geo'])['hasLocation'].sum()).reset_index()
+geoToType['totalCount'] = geoToType['geo'].map(attrDf['geo'].value_counts())
+geoToType[geoToType['hasLocation'].astype(int)!=geoToType['totalCount']]
+        
+bicsToType['suggestedType'] = bicsToType.apply(lambda x: setType(x['bics'],x['%Product'],x['%Service'],x['%Both'],
+                                                                 x['totalCount'], x['%Other']),axis=1)
+bicsToType
+
+bicsToType[bicsToType['suggestedType'].isnull()]
+
+bicsToType.to_csv("BicsToType.csv")
+
+geosMissingLocation.to_csv("GeosMissingLocation.csv")
+
+descBTT = pd.read_csv("BICS to segment type (definition based).csv")
+descBTT['segType'] = descBTT['segType'].str.upper()
+
+compdf = bicsToType[['bics','suggestedType']].set_index('bics').join(descBTT.set_index('bics'))
+
+compdf[compdf['suggestedType']==compdf['segType']]
+
+compdf[compdf['suggestedType'].isnull()]
